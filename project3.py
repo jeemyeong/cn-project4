@@ -74,7 +74,7 @@ NO = 0
 
 while 1: #server is working
 	clientSocket, addr = proxySocket.accept() #accept client socket
-	clientSocket.settimeout(1) #setup timeout with 1 sec
+	clientSocket.settimeout(0.1) #setup timeout with 1 sec
 	persistentHost = None #setup persistent host as None
 
 	try:
