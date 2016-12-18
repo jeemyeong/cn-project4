@@ -1,5 +1,6 @@
 from socket import *
 import sys
+import _thread as thread
 
 proxyPort = int(sys.argv[1]) #proxy port set with sys.argv[1]
 proxySocket = socket(AF_INET,SOCK_STREAM) #setup proxy socket
@@ -67,124 +68,131 @@ def assembleChunk(assembleChunk):
 			lastChunk = True
 	return contentLength, lastChunk, bodyLength
 
+def proxy():
+	while 1:
+		clientSocket, addr = proxySocket.accept() #accept client socket
+		clientSocket.settimeout(0.1) #setup timeout with 1 sec
+		persistentHost = None #setup persistent host as None
+
+		try:
+			clientSocketRunning = True 
+			while clientSocketRunning: #when client Socket running
+
+				assembledRequest = b'' #declare assembled request 
+				assemblingRequest = True
+				while assemblingRequest: #assembling request
+					request = clientSocket.recv(1024) #receive request
+					if not request: #if not request, do not assemble request
+						assemblingRequest = False
+					assembledRequest += request #assemble more request
+					if assembledRequest.find(b'\r\n\r\n') >= 0: #if assemble request has \r\n\r\n
+						assemblingRequest = False #finish assembling
+
+				if not assembledRequest: #if not request, break
+					break
+
+				method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(assembledRequest) #analyse request
+
+				if not persistentHost: #if not persistent connection
+					print("[CLI connected to %s:%i]" % (addr)) #connect message
+
+				host = host.decode() #decode host
+				print("[CLI ==> PRX --- SRV]")
+				print(">",method.decode(), url.decode())
+				print(">",userAgent.decode())
+
+				if host.find(".")<0 and host != "localhost": #when host is error, break
+					clientSocketRunning = False
+					print("[CLI disconnected]")
+					clientSocket.close()
+					print("-----------------------------------------------")
+					break
+
+				if persistentHost != host: #if not persistent connection
+					serverSocket = socket(AF_INET, SOCK_STREAM) #make new server socket
+					serverSocket.connect((host,80)) 
+					persistentHost = host
+					print("[SRV connected to %s:%i]" % (host, 80)) #srv connect message
+
+				serverSocket.send(assembledRequest) #send request to server socket
+				print("[CLI --- PRX ==> SRV]")
+				print(">",method.decode(), url.decode())
+				print(">",userAgent.decode())
+
+
+				serverSocket.settimeout(1) #set time out of server socket
+
+				#declare variables
+				assembledChunk = b''
+				accumulatedLength = 9223372036854775807
+				bodyLength =0
+				lastChunk =0
+				AssemblingResponse = True
+				serverError = False
+
+				while AssemblingResponse: #assembling response
+					try:
+						chunk = serverSocket.recv(1024) #receive chunk
+						if not chunk:
+							break
+						assembledChunk += chunk #assemble chunk
+						contentLength, lastChunk, bodyLength = assembleChunk(assembledChunk) #assemble chunk and analyse
+						if contentLength:
+							accumulatedLength = contentLength
+						if accumulatedLength <= bodyLength or lastChunk: #if this is last, end this loop
+							AssemblingResponse = False
+					except Exception as e: #if timeout error, this is server error
+						AssemblingResponse = False
+						serverError = True
+
+				if serverError: #when server error
+					clientSocketRunning = False #close client
+					clientSocket.close()
+					print("[CLI disconnected]")
+					serverSocket.close()
+					print("[SRV disconnected]")
+					print("-----------------------------------------------")
+					break
+
+				print("[CLI --- PRX <== SRV]") #if not error, we could got the response
+				status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(assembledChunk) #analyse response
+				print(">",status.decode())
+				if contentType and contentLength:
+					print(">",contentType.decode(),contentLength.decode()+"bytes")
+
+				clientSocket.send(assembledChunk) #send response to client socket
+				print("[CLI <== PRX --- SRV]")
+				print(">",status.decode()) #log status
+				if contentType and contentLength:
+					print(">",contentType.decode(),contentLength.decode()+"bytes") #log type and size
+
+				if connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
+					print("[CLI disconnected]")
+					clientSocket.close()
+					print("[SRV disconnected]")
+					serverSocket.close()
+					print("-----------------------------------------------")
+					clientSocketRunning = False
+					break
+
+		except Exception as e: # if client timeout error, deal it
+			clientSocket.close() #close client socket
+			if persistentHost: #if persistent connection, log these msg
+				print("[CLI disconnected]")
+				clientSocket.close()
+				print("[SRV disconnected]")
+				serverSocket.close()
+				print("-----------------------------------------------")
+
 print("Starting proxy server on port %s" % proxyPort)
 print("-----------------------------------------------")
 proxySocket.listen(100)
 NO = 0
 
-while 1: #server is working
-	clientSocket, addr = proxySocket.accept() #accept client socket
-	clientSocket.settimeout(0.1) #setup timeout with 1 sec
-	persistentHost = None #setup persistent host as None
+thread.start_new_thread(proxy, ())
+thread.start_new_thread(proxy, ())
+thread.start_new_thread(proxy, ())
+thread.start_new_thread(proxy, ())
 
-	try:
-		clientSocketRunning = True 
-		while clientSocketRunning: #when client Socket running
-
-			assembledRequest = b'' #declare assembled request 
-			assemblingRequest = True
-			while assemblingRequest: #assembling request
-				request = clientSocket.recv(1024) #receive request
-				if not request: #if not request, do not assemble request
-					assemblingRequest = False
-				assembledRequest += request #assemble more request
-				if assembledRequest.find(b'\r\n\r\n') >= 0: #if assemble request has \r\n\r\n
-					assemblingRequest = False #finish assembling
-
-			if not assembledRequest: #if not request, break
-				break
-
-			method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(assembledRequest) #analyse request
-
-			if not persistentHost: #if not persistent connection
-				NO+=1
-				print("%s [X] Redirection [X] Mobile [X] Falsification" % NO) #first line
-				print("[CLI connected to %s:%i]" % (addr)) #connect message
-
-			host = host.decode() #decode host
-			print("[CLI ==> PRX --- SRV]")
-			print(">",method.decode(), url.decode())
-			print(">",userAgent.decode())
-
-			if host.find(".")<0 and host != "localhost": #when host is error, break
-				clientSocketRunning = False
-				print("[CLI disconnected]")
-				clientSocket.close()
-				print("-----------------------------------------------")
-				break
-
-			if persistentHost != host: #if not persistent connection
-				serverSocket = socket(AF_INET, SOCK_STREAM) #make new server socket
-				serverSocket.connect((host,80)) 
-				persistentHost = host
-				print("[SRV connected to %s:%i]" % (host, 80)) #srv connect message
-
-			serverSocket.send(assembledRequest) #send request to server socket
-			print("[CLI --- PRX ==> SRV]")
-			print(">",method.decode(), url.decode())
-			print(">",userAgent.decode())
-
-
-			serverSocket.settimeout(1) #set time out of server socket
-
-			#declare variables
-			assembledChunk = b''
-			accumulatedLength = 9223372036854775807
-			bodyLength =0
-			lastChunk =0
-			AssemblingResponse = True
-			serverError = False
-
-			while AssemblingResponse: #assembling response
-				try:
-					chunk = serverSocket.recv(1024) #receive chunk
-					if not chunk:
-						break
-					assembledChunk += chunk #assemble chunk
-					contentLength, lastChunk, bodyLength = assembleChunk(assembledChunk) #assemble chunk and analyse
-					if contentLength:
-						accumulatedLength = contentLength
-					if accumulatedLength <= bodyLength or lastChunk: #if this is last, end this loop
-						AssemblingResponse = False
-				except Exception as e: #if timeout error, this is server error
-					AssemblingResponse = False
-					serverError = True
-
-			if serverError: #when server error
-				clientSocketRunning = False #close client
-				clientSocket.close()
-				print("[CLI disconnected]")
-				serverSocket.close()
-				print("[SRV disconnected]")
-				print("-----------------------------------------------")
-				break
-
-			print("[CLI --- PRX <== SRV]") #if not error, we could got the response
-			status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(assembledChunk) #analyse response
-			print(">",status.decode())
-			if contentType and contentLength:
-				print(">",contentType.decode(),contentLength.decode()+"bytes")
-
-			clientSocket.send(assembledChunk) #send response to client socket
-			print("[CLI <== PRX --- SRV]")
-			print(">",status.decode()) #log status
-			if contentType and contentLength:
-				print(">",contentType.decode(),contentLength.decode()+"bytes") #log type and size
-
-			if connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
-				print("[CLI disconnected]")
-				clientSocket.close()
-				print("[SRV disconnected]")
-				serverSocket.close()
-				print("-----------------------------------------------")
-				clientSocketRunning = False
-				break
-
-	except Exception as e: # if client timeout error, deal it
-		clientSocket.close() #close client socket
-		if persistentHost: #if persistent connection, log these msg
-			print("[CLI disconnected]")
-			clientSocket.close()
-			print("[SRV disconnected]")
-			serverSocket.close()
-			print("-----------------------------------------------")
+while 1:
+	pass
