@@ -1,11 +1,23 @@
 from socket import *
 import sys
 import _thread as thread
+from datetime import datetime
+
+maxConn = int(sys.argv[2])
+maxSize = int(sys.argv[3])
+
+no = 0
+noConn = 0
+cacheSize = 0.0
 
 proxyPort = int(sys.argv[1]) #proxy port set with sys.argv[1]
 proxySocket = socket(AF_INET,SOCK_STREAM) #setup proxy socket
 proxySocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1) #for break address using when this source finished 
 proxySocket.bind(('',proxyPort)) #bind proxy socket
+
+# list for caching
+# element: tuple of URL & response & status & content type
+cache = []
 
 def analyseRequest(request): #analyse Request
 	requestHeader = {} #declare request header dic
@@ -68,12 +80,30 @@ def assembleChunk(assembleChunk):
 			lastChunk = True
 	return contentLength, lastChunk, bodyLength
 
+def getTime():
+	rawData = str(datetime.now())
+	space = rawData.find(' ')
+	return rawData[space+1:len(rawData)-3]
+
+def getMilSec(s, f):
+	start = float(s[len(s)-6:])
+	finish = float(f[len(s)-6:])
+	tmp = int((finish-start)*1000)
+	if tmp < 0:
+		tmp += 1000
+	return tmp
+
 def proxy():
+	global no
+	global noConn
+	global cacheSize
+	global cache
 	while 1:
 		clientSocket, addr = proxySocket.accept() #accept client socket
+		noConn += 1
 		clientSocket.settimeout(0.1) #setup timeout with 1 sec
 		persistentHost = None #setup persistent host as None
-
+	
 		try:
 			clientSocketRunning = True 
 			while clientSocketRunning: #when client Socket running
@@ -92,12 +122,47 @@ def proxy():
 					break
 
 				method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(assembledRequest) #analyse request
-
+				
 				if not persistentHost: #if not persistent connection
-					print("[CLI connected to %s:%i]" % (addr)) #connect message
+					no += 1
+					print('%d [Conn: %d/%d] [Cache: %.2f/%dMB] [Items: %d]'%(no, noConn, maxConn, cacheSize, maxSize, len(cache)))
+					print('[CLI connected to %s:%i]'%(addr))
+
+				# check requested file is in cache
+				found = False
+				for c in cache:
+					if url == c[0]:
+						found = True
+						cachedURL, cachedResponse, cachedStatus, cachedContentType = c
+						break
+
+				# CACHE HIT
+				if found:
+					host = host.decode() #decode host
+					startTime = getTime()
+					print('[CLI ==> PRX --- SRV]', '@', startTime)
+					print(">",method.decode(), url.decode())
+					print(">",userAgent.decode())
+					print("[SRV connected to %s:%i]" % (host, 80))
+					print('@@@@@@@@@@@@@@@@@@ CACHE HIT @@@@@@@@@@@@@@@@@@@@');
+					clientSocket.send(cachedResponse)
+					finishTime = getTime()
+					print('[CLI <== PRX --- SRV]', '@', finishTime)
+					print(">",cachedStatus.decode()) #log status
+					if cachedContentType:
+						print(">",contentType.decode()) #log type and size
+					tmp = getMilSec(startTime, finishTime)
+					print('# %dms'%(tmp))
+					clientSocket.close()
+					print('[CLI disconnected]')
+					print('[SRV disconnected]')
+					print("-----------------------------------------------")
+
+					break
 
 				host = host.decode() #decode host
-				print("[CLI ==> PRX --- SRV]")
+				startTime = getTime()
+				print('[CLI ==> PRX --- SRV]', '@', startTime)
 				print(">",method.decode(), url.decode())
 				print(">",userAgent.decode())
 
@@ -112,10 +177,11 @@ def proxy():
 					serverSocket = socket(AF_INET, SOCK_STREAM) #make new server socket
 					serverSocket.connect((host,80)) 
 					persistentHost = host
-					print("[SRV connected to %s:%i]" % (host, 80)) #srv connect message
+					print("[SRV connected to %s:%i]" % (host, 80))
 
 				serverSocket.send(assembledRequest) #send request to server socket
-				print("[CLI --- PRX ==> SRV]")
+				print('################## CACHE MISS ###################')
+				print('[CLI --- PRX ==> SRV]', '@', getTime())
 				print(">",method.decode(), url.decode())
 				print(">",userAgent.decode())
 
@@ -154,25 +220,48 @@ def proxy():
 					print("-----------------------------------------------")
 					break
 
-				print("[CLI --- PRX <== SRV]") #if not error, we could got the response
+				print('[CLI --- PRX <== SRV]', '@', getTime())
 				status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(assembledChunk) #analyse response
 				print(">",status.decode())
-				if contentType and contentLength:
-					print(">",contentType.decode(),contentLength.decode()+"bytes")
+				if contentType:
+					print(">",contentType.decode())
+
+				# cache overflow
+				while cacheSize+len(assembledChunk)/(1024*1024) >= maxSize:
+					cacheSize -= len(cache[0][1])/(1024*1024)
+					del cache[0]	# delete LRUed data
+
+					print('################# CACHE REMOVED #################')
+					print('> %s %.2fMB', (cache[0][0].decode(), len(cache[0][1])/(1024*1024)))
+					print('> This file has been removed due to LRU !')
+				
+				# push response into cache
+				cache.append((url, assembledChunk, status, contentType))
+				cacheSize += len(assembledChunk)/(1024*1024)
+
+				print('################## CACHE ADDED ##################')
+				print('> %s %.2fMB'%(url.decode(), cacheSize))
+				print('> This file has been added to the cache')
+				print('#################################################')
 
 				clientSocket.send(assembledChunk) #send response to client socket
-				print("[CLI <== PRX --- SRV]")
+				finishTime = getTime()
+				print('[CLI <== PRX --- SRV]', '@', finishTime)
 				print(">",status.decode()) #log status
-				if contentType and contentLength:
-					print(">",contentType.decode(),contentLength.decode()+"bytes") #log type and size
+				if contentType:
+					print(">",contentType.decode()) #log type and size
+
+				tmp = getMilSec(startTime, finishTime)
+				print('# %dms'%(tmp))
 
 				if connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
-					print("[CLI disconnected]")
+					print('[CLI disconnected]')
 					clientSocket.close()
-					print("[SRV disconnected]")
+					print('[SRV disconnected]')
 					serverSocket.close()
 					print("-----------------------------------------------")
 					clientSocketRunning = False
+
 					break
 
 		except Exception as e: # if client timeout error, deal it
@@ -183,16 +272,19 @@ def proxy():
 				print("[SRV disconnected]")
 				serverSocket.close()
 				print("-----------------------------------------------")
+		
+		noConn -= 1
+
 
 print("Starting proxy server on port %s" % proxyPort)
 print("-----------------------------------------------")
 proxySocket.listen(100)
 NO = 0
 
-thread.start_new_thread(proxy, ())
-thread.start_new_thread(proxy, ())
-thread.start_new_thread(proxy, ())
-thread.start_new_thread(proxy, ())
+# start maxConn instances of threads
+for i in range(0, maxConn):
+	thread.start_new_thread(proxy, ())
 
+# wait for threads
 while 1:
 	pass
