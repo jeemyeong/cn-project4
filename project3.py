@@ -148,17 +148,19 @@ def proxy():
 
 				# check requested file is in cache
 				found = False
-				for c in cache:
-					if url == c[0]:
+				for i in range(len(cache)):
+					if url == c[i]:
 						found = True
-						# repush hit file into the back of cache (the cache sorted for LRU)
+						idx = i
 						cachedURL, cachedResponse, cachedStatus, cachedContentType = c
-						del c
-						cache.append((cachedURL, cachedResponse, cachedStatus, cachedContentType))
 						break
 
 				# CACHE HIT
 				if found:
+					# repush hit file into the back of cache (the cache sorted for LRU)
+					del cache[idx]
+					cache.append((cachedURL, cachedResponse, cachedStatus, cachedContentType))
+
 					host = host.decode() #decode host
 					startTime = getTime()
 					loggingLineList.append(" ".join(('[CLI ==> PRX --- SRV]', '@', startTime)))
