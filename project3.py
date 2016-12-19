@@ -152,7 +152,7 @@ def proxy():
 					if url == cache[i][0]:
 						found = True
 						idx = i
-						cachedURL, cachedResponse, cachedStatus, cachedContentType = c
+						cachedURL, cachedResponse, cachedStatus, cachedContentType = cache[i]
 						break
 
 				# CACHE HIT
