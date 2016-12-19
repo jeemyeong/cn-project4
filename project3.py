@@ -2,9 +2,22 @@ from socket import *
 import sys
 import _thread as thread
 from datetime import datetime
+import gzip
 
 maxConn = int(sys.argv[2])
 maxSize = int(sys.argv[3])
+
+compression = False
+chunking = False
+persistentConnection = False
+
+for argv in sys.argv[4:]:
+	if argv == "-comp":
+		compression = True
+	if argv == "-chunk":
+		chunking = True
+	if argv == "-pc":
+		persistentConnection = True
 
 if(maxConn==0):
 	maxConn = 2047
@@ -30,13 +43,14 @@ def analyseRequest(request): #analyse Request
 	requestBody = request[requestBodyCri+4:] #delcare request body with cri
 	requestHeaderLines = request[:requestBodyCri].split(b"\r\n") #list of request header lines
 	method, url, ver = requestHeaderLines.pop(0).split(b' ') #method, url, ver of first line
-
 	host = url.split(b"//")[-1].split(b"/")[0] #find out host with url
 	for requestHeaderLine in requestHeaderLines: #with each header line of list
 		cri = requestHeaderLine.find(b": ") 
 		if cri:
 			requestHeader[requestHeaderLine[:cri]] = requestHeaderLine[cri+2:] #fill request header dictionary
 
+	if(b'Host' in requestHeader.keys()):
+		host = requestHeader[b'Host']
 	mobile = False
 	userAgent = False
 	if b'User-Agent' in requestHeader.keys(): #if User-Agent in request header
@@ -71,17 +85,22 @@ def analyseResponse(response): #analyse Response
 def assembleChunk(assembleChunk):
 	contentLength = 0 #declare content Length
 	lastChunk = False #we can judge this assembleChunk is last or not with this lastChunk
+	lengthExist = False
+	chunkedExist = False
 	if assembleChunk.find(b'Content-Length') >= 0: #if here is content-length
+		lengthExist = True
 		lengthStart = assembleChunk.find(b'Content-Length')+16
 		lengthEnd = assembleChunk[assembleChunk.find(b'Content-Length')+16:].find(b'\r\n')
 		contentLength = int(assembleChunk[lengthStart:lengthStart+lengthEnd]) # get content-length in assembleChunk
+	if assembleChunk.find(b'Transfer-Encoding') >= 0: #if here is content-length
+		chunkedExist = True
 	if assembleChunk.find(b'\r\n0\r\n\r\n') >= 0: #if here is \r\n0\r\n\r\n
 		lastChunk = True #judge this assembleChunk is last
 	bodyLength = 0 #declare bodyLength
 	if assembleChunk.find(b'\r\n\r\n'): #if here is \r\n\r\n
 		bodyLength = len(assembleChunk[assembleChunk.find(b'\r\n\r\n')+4:]) #get body length
 	if assembleChunk[:4] == b"HTTP":
-		if assembleChunk[9:12] == b'304':
+		if assembleChunk[9:12] != b'200' and not lengthExist and not chunkedExist:
 			lastChunk = True
 	return contentLength, lastChunk, bodyLength
 
@@ -97,6 +116,50 @@ def getMilSec(s, f):
 	if tmp < 0:
 		tmp += 1000
 	return tmp
+def sendResponseToClientSocket(clientSocket, response):
+	status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(response)
+
+	global compression
+	global chunking
+	try:
+		newResponse = ver +b' '+ status + b'\r\n'
+		if compression and not (b'Content-Encoding' in responseHeader.keys() and responseHeader[b'Content-Encoding'] == b'gzip') and not (b'Content-Type' in responseHeader.keys() and responseHeader[b'Content-Type'][:5]==b'image'):
+			responseHeader[b'Content-Encoding'] = b'gzip'
+			responseBody = gzip.compress(responseBody)
+			if b'Content-Length' in responseHeader.keys():
+				responseHeader[b'Content-Length'] = str(len(responseBody)).encode('utf-8')
+
+		if chunking and not (b'Transfer-Encoding' in responseHeader.keys() and responseHeader[b'Transfer-Encoding'] == b'chunked'):
+			responseHeader[b'Transfer-Encoding'] = b'chunked'
+			responseBody = str(hex(len(responseBody))).split('x')[1].encode('utf-8') + b'\r\n' + responseBody + b'\r\n0\r\n\r\n'
+			if b'Content-Length' in responseHeader.keys():
+				del responseHeader[b'Content-Length']
+		if not persistentConnection:
+			responseHeader[b'Proxy-Connection'] = b'close'
+	except Exception as e:
+		print(e)
+
+	for eachHeader in responseHeader:
+		newResponse += eachHeader + b': ' + responseHeader[eachHeader] + b'\r\n'
+	newResponse += b'\r\n' + responseBody	
+	clientSocket.send(newResponse)
+
+def sendRequestToServerSocket(serverSocket, request):
+	method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(request)
+	global persistentConnection
+	newRequest = b''
+	try:
+		newRequest = method +b' '+ url +b' '+ ver + b'\r\n'
+		if not persistentConnection:
+			requestHeader[b'Connection'] = b'close'
+			requestHeader[b'Proxy-Connection'] = b'close'
+	except Exception as e:
+		print(e)		
+
+	for eachHeader in requestHeader:
+		newRequest += eachHeader + b': ' + requestHeader[eachHeader] + b'\r\n'
+	newRequest += b'\r\n' + requestBody	
+	serverSocket.send(newRequest)
 
 def infoFirstLine(no, noConn, maxConn, cacheSize, maxSize, lenCache):
 	if(maxConn==2047 and maxSize==9223372036854775807):
@@ -119,7 +182,7 @@ def proxy():
 		loggingLineList = []
 		clientSocket, addr = proxySocket.accept() #accept client socket
 		noConn += 1
-		clientSocket.settimeout(0.1) #setup timeout with 1 sec
+		clientSocket.settimeout(1) #setup timeout with 1 sec
 		persistentHost = None #setup persistent host as None
 	
 		try:
@@ -169,7 +232,7 @@ def proxy():
 					loggingLineList.append(" ".join((">",userAgent.decode())))
 					loggingLineList.append("[SRV connected to %s:%i]" % (host, 80))
 					loggingLineList.append('@@@@@@@@@@@@@@@@@@ CACHE HIT @@@@@@@@@@@@@@@@@@@@')
-					clientSocket.send(cachedResponse)
+					sendResponseToClientSocket(clientSocket, cachedResponse)
 					finishTime = getTime()
 					loggingLineList.append(" ".join(('[CLI <== PRX --- SRV]', '@', finishTime)))
 					loggingLineList.append(" ".join((">",cachedStatus.decode()))) #log status
@@ -203,7 +266,7 @@ def proxy():
 					persistentHost = host
 					loggingLineList.append("[SRV connected to %s:%i]" % (host, 80))
 
-				serverSocket.send(assembledRequest) #send request to server socket
+				sendRequestToServerSocket(serverSocket, assembledRequest) #send request to server socket
 				loggingLineList.append('################## CACHE MISS ###################')
 				loggingLineList.append(" ".join(('[CLI --- PRX ==> SRV]', '@', getTime())))
 				loggingLineList.append(" ".join((">",method.decode(), url.decode())))
@@ -268,7 +331,7 @@ def proxy():
 				loggingLineList.append('> This file has been added to the cache')
 				loggingLineList.append('#################################################')
 
-				clientSocket.send(assembledChunk) #send response to client socket
+				sendResponseToClientSocket(clientSocket, assembledChunk) #send response to client socket
 				finishTime = getTime()
 				loggingLineList.append(" ".join(('[CLI <== PRX --- SRV]', '@', finishTime)))
 				loggingLineList.append(" ".join((">",status.decode()))) #log status
@@ -278,16 +341,14 @@ def proxy():
 				tmp = getMilSec(startTime, finishTime)
 				loggingLineList.append('# %dms'%(tmp))
 
-				if connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
+				if persistentConnection==False or connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
 					loggingLineList.append('[CLI disconnected]')
 					clientSocket.close()
 					loggingLineList.append('[SRV disconnected]')
 					serverSocket.close()
 					loggingLineList.append("-----------------------------------------------")
 					clientSocketRunning = False
-
 					break
-
 		except Exception as e: # if client timeout error, deal it
 			clientSocket.close() #close client socket
 			if persistentHost: #if persistent connection, log these msg

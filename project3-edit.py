@@ -10,9 +10,20 @@ logging.info("It works!") #ToDelete
 
 maxConn = int(sys.argv[2])
 maxSize = int(sys.argv[3])
+
 compression = False
 chunking = False
 persistentConnection = False
+
+for argv in sys.argv[4:]:
+	if argv == "-comp":
+		compression = True
+	if argv == "-chunk":
+		chunking = True
+	if argv == "-pc":
+		persistentConnection = True
+
+
 if(maxConn==0):
 	maxConn = 2047
 if(maxSize==0):
@@ -74,11 +85,10 @@ def analyseResponse(response): #analyse Response
 		contentLength = responseHeader[b'Content-Length'] #get content-length
 	if b'Connection' in responseHeader.keys():
 		connection = responseHeader[b'Connection'] #get connection
-
-	if b'Content-Encoding' in responseHeader.keys() and b'Content-Type' in responseHeader.keys():
-		if responseHeader[b'Content-Type'][:5] == b'image':
-			# print(response)
-			pass
+	# if b'Content-Encoding' in responseHeader.keys() and b'Content-Type' in responseHeader.keys():
+	# 	if responseHeader[b'Content-Type'][:5] == b'image':
+	# 		# print(response)
+	# 		pass
 
 	return status, ver, responseHeader, responseBody, contentType, contentLength, connection
 
@@ -130,13 +140,13 @@ def sendResponseToClientSocket(clientSocket, response):
 			responseHeader[b'Content-Encoding'] = b'gzip'
 			responseBody = gzip.compress(responseBody)
 			logging.info("response body")
-			print(responseBody)
+			# print(responseBody)
 			if b'Content-Length' in responseHeader.keys():
 				responseHeader[b'Content-Length'] = str(len(responseBody)).encode('utf-8')
 				# del responseHeader[b'Content-Length']
-		if(b'Content-Type' in responseHeader.keys() and responseHeader[b'Content-Type'][:5]==b'image'):
-			logging.info("LALALA")
-			print(response)
+		# if(b'Content-Type' in responseHeader.keys() and responseHeader[b'Content-Type'][:5]==b'image'):
+		# 	logging.info("LALALA")
+		# 	print(response)
 
 		if chunking and not (b'Transfer-Encoding' in responseHeader.keys() and responseHeader[b'Transfer-Encoding'] == b'chunked'):
 			responseHeader[b'Transfer-Encoding'] = b'chunked'
@@ -230,14 +240,19 @@ def proxy():
 
 				# check requested file is in cache
 				found = False
-				for c in cache:
-					if url == c[0]:
+				for i in range(len(cache)):
+					if url == cache[i][0]:
 						found = True
-						cachedURL, cachedResponse, cachedStatus, cachedContentType = c
+						idx = i
+						cachedURL, cachedResponse, cachedStatus, cachedContentType = cache[i]
 						break
 
 				# CACHE HIT
 				if found:
+					# repush hit file into the back of cache (the cache sorted for LRU)
+					del cache[idx]
+					cache.append((cachedURL, cachedResponse, cachedStatus, cachedContentType))
+
 					host = host.decode() #decode host
 					startTime = getTime()
 					loggingLineList.append(" ".join(('[CLI ==> PRX --- SRV]', '@', startTime)))
