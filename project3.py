@@ -297,7 +297,7 @@ def proxy():
 				serverSocket.close()
 				loggingLineList.append("-----------------------------------------------")
 		if(len(loggingLineList)): #print log
-			print(*loggingLineList, sep='\n')
+			print('\n'.join(loggingLineList))
 		noConn -= 1
 
 
