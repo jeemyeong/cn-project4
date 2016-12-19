@@ -151,7 +151,10 @@ def proxy():
 				for c in cache:
 					if url == c[0]:
 						found = True
+						# repush hit file into the back of cache (the cache sorted for LRU)
 						cachedURL, cachedResponse, cachedStatus, cachedContentType = c
+						del c
+						cache.append((cachedURL, cachedResponse, cachedStatus, cachedContentType))
 						break
 
 				# CACHE HIT
