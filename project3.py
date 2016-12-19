@@ -149,7 +149,7 @@ def proxy():
 				# check requested file is in cache
 				found = False
 				for i in range(len(cache)):
-					if url == c[i]:
+					if url == cache[i][0]:
 						found = True
 						idx = i
 						cachedURL, cachedResponse, cachedStatus, cachedContentType = c
