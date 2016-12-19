@@ -6,6 +6,11 @@ from datetime import datetime
 maxConn = int(sys.argv[2])
 maxSize = int(sys.argv[3])
 
+if(maxConn==0):
+	maxConn = 2047
+if(maxSize==0):
+	maxSize = 9223372036854775807
+
 no = 0
 noConn = 0
 cacheSize = 0.0
@@ -93,6 +98,16 @@ def getMilSec(s, f):
 		tmp += 1000
 	return tmp
 
+def printInfoFirstLine(no, noConn, maxConn, cacheSize, maxSize, lenCache):
+	if(maxConn==2047 and maxSize==9223372036854775807):
+		print('%d [Conn: %d/MAX] [Cache: %.2f/MAX] [Items: %d]'%(no, noConn, cacheSize, lenCache))
+	if(maxConn!=2047 and maxSize==9223372036854775807):
+		print('%d [Conn: %d/%d] [Cache: %.2f/MAX] [Items: %d]'%(no, noConn, maxConn, cacheSize, lenCache))
+	if(maxConn==2047 and maxSize!=9223372036854775807):
+		print('%d [Conn: %d/MAX] [Cache: %.2f/%dMB] [Items: %d]'%(no, noConn, cacheSize, maxSize, lenCache))
+	if(maxConn!=2047 and maxSize!=9223372036854775807):
+		print('%d [Conn: %d/%d] [Cache: %.2f/%dMB] [Items: %d]'%(no, noConn, maxConn, cacheSize, maxSize, lenCache))
+
 def proxy():
 	global no
 	global noConn
@@ -125,7 +140,7 @@ def proxy():
 				
 				if not persistentHost: #if not persistent connection
 					no += 1
-					print('%d [Conn: %d/%d] [Cache: %.2f/%dMB] [Items: %d]'%(no, noConn, maxConn, cacheSize, maxSize, len(cache)))
+					printInfoFirstLine(no, noConn, maxConn, cacheSize, maxSize, len(cache))
 					print('[CLI connected to %s:%i]'%(addr))
 
 				# check requested file is in cache
@@ -283,7 +298,10 @@ NO = 0
 
 # start maxConn instances of threads
 for i in range(0, maxConn):
-	thread.start_new_thread(proxy, ())
+	try:
+		thread.start_new_thread(proxy, ())
+	except Exception as e:
+		pass
 
 # wait for threads
 while 1:
