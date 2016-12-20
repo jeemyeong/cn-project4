@@ -124,7 +124,7 @@ def sendResponseToClientSocket(clientSocket, response):
 	global chunking
 	try:
 		newResponse = ver +b' '+ status + b'\r\n'
-		if compression and not (b'Content-Encoding' in responseHeader.keys() and responseHeader[b'Content-Encoding'] == b'gzip') and not (b'Content-Type' in responseHeader.keys() and responseHeader[b'Content-Type'][:5]==b'image'):
+		if compression and not (b'Content-Encoding' in responseHeader.keys() and responseHeader[b'Content-Encoding'] == b'gzip'):
 			responseHeader[b'Content-Encoding'] = b'gzip'
 			responseBody = gzip.compress(responseBody)
 			if b'Content-Length' in responseHeader.keys():
