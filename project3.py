@@ -3,6 +3,7 @@ import sys
 import _thread as thread
 from datetime import datetime
 import gzip
+from collections import OrderedDict
 
 maxConn = int(sys.argv[2])
 maxSize = int(sys.argv[3])
@@ -35,7 +36,7 @@ proxySocket.bind(('',proxyPort)) #bind proxy socket
 
 # list for caching
 # element: tuple of URL & response & status & content type
-cache = []
+cacheDict = OrderedDict()
 
 def analyseRequest(request): #analyse Request
 	requestHeader = {} #declare request header dic
@@ -176,7 +177,7 @@ def proxy():
 	global no
 	global noConn
 	global cacheSize
-	global cache
+	global cacheDict
 
 	while 1:
 		loggingLineList = []
@@ -206,23 +207,19 @@ def proxy():
 				
 				if not persistentHost: #if not persistent connection
 					no += 1
-					loggingLineList.append(infoFirstLine(no, noConn, maxConn, cacheSize, maxSize, len(cache)))
+					loggingLineList.append(infoFirstLine(no, noConn, maxConn, cacheSize, maxSize, len(cacheDict)))
 					loggingLineList.append('[CLI connected to %s:%i]'%(addr))
 
 				# check requested file is in cache
 				found = False
-				for i in range(len(cache)):
-					if url == cache[i][0]:
-						found = True
-						idx = i
-						cachedURL, cachedResponse, cachedStatus, cachedContentType = cache[i]
-						break
+				if url in cacheDict.keys():
+					found = True
+					cachedURL, cachedResponse, cachedStatus, cachedContentType = cacheDict[url]
 
 				# CACHE HIT
 				if found:
-					# repush hit file into the back of cache (the cache sorted for LRU)
-					del cache[idx]
-					cache.append((cachedURL, cachedResponse, cachedStatus, cachedContentType))
+					cacheDict.pop(url)
+					cacheDict[url] = (cachedURL, cachedResponse, cachedStatus, cachedContentType)
 
 					host = host.decode() #decode host
 					startTime = getTime()
@@ -315,15 +312,15 @@ def proxy():
 
 				# cache overflow
 				while cacheSize+len(assembledChunk)/(1024*1024) >= maxSize:
-					cacheSize -= len(cache[0][1])/(1024*1024)
-					del cache[0]	# delete LRUed data
+					removedCache = cacheDict.popitem()
+					cacheSize -= len(removedCache[1])
 
 					loggingLineList.append('################# CACHE REMOVED #################')
-					loggingLineList.append(" ".join(('> %s %.2fMB', (cache[0][0].decode(), len(cache[0][1])/(1024*1024)))))
+					loggingLineList.append(" ".join(('> %s %.2fMB', (removedCache[0].decode(), len(removedCache[1])/(1024*1024)))))
 					loggingLineList.append('> This file has been removed due to LRU !')
 				
 				# push response into cache
-				cache.append((url, assembledChunk, status, contentType))
+				cacheDict[url] = (url, assembledChunk, status, contentType)
 				cacheSize += len(assembledChunk)/(1024*1024)
 
 				loggingLineList.append('################## CACHE ADDED ##################')
@@ -364,8 +361,7 @@ def proxy():
 
 print("Starting proxy server on port %s" % proxyPort)
 print("-----------------------------------------------")
-proxySocket.listen(100)
-NO = 0
+proxySocket.listen(maxConn)
 
 # start maxConn instances of threads
 for i in range(0, maxConn):
