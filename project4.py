@@ -312,7 +312,7 @@ def proxy():
 
 				# cache overflow
 				while cacheSize+len(assembledChunk)/(1024*1024) >= maxSize:
-					removedCache = cacheDict.popitem()
+					removedCache = cacheDict.popitem(last=False)
 					cacheSize -= len(removedCache[1])
 
 					loggingLineList.append('################# CACHE REMOVED #################')
