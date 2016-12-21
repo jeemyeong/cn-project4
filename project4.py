@@ -148,7 +148,9 @@ def sendResponseToClientSocket(clientSocket, response):
 
 def chunking(responseBody):
 	chunkedStr = b''
-	splitNumber = len(responseBody)/4
+	splitNumber = int(len(responseBody)/4)
+	if(splitNumber==0):
+		splitNumber = len(responseBody)
 	remainStr = responseBody
 	while len(remainStr):
 		if(len(remainStr)>splitNumber):
