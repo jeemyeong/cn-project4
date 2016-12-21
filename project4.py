@@ -4,6 +4,8 @@ import _thread as thread
 from datetime import datetime
 import gzip
 from collections import OrderedDict
+import coloredlogs, logging #ToDelete
+coloredlogs.install() #ToDelete
 
 maxConn = int(sys.argv[2])
 maxSize = int(sys.argv[3])
@@ -147,7 +149,7 @@ def sendResponseToClientSocket(clientSocket, response):
 			responseHeader[b'Proxy-Connection'] = b'close'
 	except Exception as e:
 		print(e)
-
+	
 	for eachHeader in responseHeader:
 		newResponse += eachHeader + b': ' + responseHeader[eachHeader] + b'\r\n'
 	newResponse += b'\r\n' + responseBody	
@@ -337,7 +339,7 @@ def runClientSocket(clientSocket, addr, loggingLineList, persistentHost):
 			# cache overflow
 			while cacheSize+len(assembledChunk)/(1024*1024) >= maxSize:
 				removedCache = cacheDict.popitem(last=False)
-				cacheSize -= len(removedCache[1])
+				cacheSize -= len(removedCache[1])/(1024*1024)
 
 				loggingLineList.append('################# CACHE REMOVED #################')
 				loggingLineList.append(" ".join(('> %s %.2fMB', (removedCache[0].decode(), len(removedCache[1])/(1024*1024)))))
