@@ -132,7 +132,8 @@ def sendResponseToClientSocket(clientSocket, response):
 
 		if chunking and not (b'Transfer-Encoding' in responseHeader.keys() and responseHeader[b'Transfer-Encoding'] == b'chunked'):
 			responseHeader[b'Transfer-Encoding'] = b'chunked'
-			responseBody = str(hex(len(responseBody))).split('x')[1].encode('utf-8') + b'\r\n' + responseBody + b'\r\n0\r\n\r\n'
+
+			responseBody = chunking(responseBody)
 			if b'Content-Length' in responseHeader.keys():
 				del responseHeader[b'Content-Length']
 		if not persistentConnection:
@@ -144,6 +145,20 @@ def sendResponseToClientSocket(clientSocket, response):
 		newResponse += eachHeader + b': ' + responseHeader[eachHeader] + b'\r\n'
 	newResponse += b'\r\n' + responseBody	
 	clientSocket.send(newResponse)
+
+def chunking(responseBody):
+	chunkedStr = b''
+	splitNumber = len(responseBody)/4
+	remainStr = responseBody
+	while len(remainStr):
+		if(len(remainStr)>splitNumber):
+			chunkedStr += str(hex(splitNumber)).split('x')[1].encode('utf-8') + b'\r\n' + remainStr[:splitNumber] + b'\r\n'
+			remainStr = remainStr[splitNumber:]
+		else:
+			chunkedStr += str(hex(len(remainStr))).split('x')[1].encode('utf-8') + b'\r\n' + remainStr + b'\r\n'
+			remainStr = ""
+	chunkedStr += b'0\r\n\r\n'
+	return chunkedStr
 
 def sendRequestToServerSocket(serverSocket, request):
 	method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(request)
