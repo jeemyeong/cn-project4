@@ -119,7 +119,6 @@ def getMilSec(s, f):
 	return tmp
 def sendResponseToClientSocket(clientSocket, response):
 	status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(response)
-
 	global compression
 	global chunking
 	try:
@@ -395,7 +394,7 @@ def proxy():
 		persistentHost = None #setup persistent host as None
 		clientSocket, addr, loggingLineList, persistentHost = runClientSocket(clientSocket, addr, loggingLineList, persistentHost)
 		if(len(loggingLineList)): #print log
-			print('\n'.join(loggingLineList))
+			print('\n'.join(loggingLineList)+'\n')
 		noConn -= 1
 
 
