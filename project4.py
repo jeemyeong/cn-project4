@@ -123,14 +123,22 @@ def sendResponseToClientSocket(clientSocket, response):
 	global compression
 	global chunking
 	try:
+		chunked = (b'Transfer-Encoding' in responseHeader.keys() and responseHeader[b'Transfer-Encoding'] == b'chunked')
+		gzipped = (b'Content-Encoding' in responseHeader.keys() and responseHeader[b'Content-Encoding'] == b'gzip')
 		newResponse = ver +b' '+ status + b'\r\n'
-		if compression and not (b'Content-Encoding' in responseHeader.keys() and responseHeader[b'Content-Encoding'] == b'gzip'):
+		if compression and not gzipped and not chunked:
 			responseHeader[b'Content-Encoding'] = b'gzip'
 			responseBody = gzip.compress(responseBody)
 			if b'Content-Length' in responseHeader.keys():
 				responseHeader[b'Content-Length'] = str(len(responseBody)).encode('utf-8')
+		if compression and not gzipped and chunked:
+			responseHeader[b'Content-Encoding'] = b'gzip'
+			assembledResponseBody = unchunking(responseBody)
+			responseBody = chunking(gzip.compress(assembledResponseBody))
+			if b'Content-Length' in responseHeader.keys():
+				del responseHeader[b'Content-Length']
 
-		if chunking and not (b'Transfer-Encoding' in responseHeader.keys() and responseHeader[b'Transfer-Encoding'] == b'chunked'):
+		if chunking and not chunked:
 			responseHeader[b'Transfer-Encoding'] = b'chunked'
 
 			responseBody = chunking(responseBody)
@@ -158,9 +166,17 @@ def chunking(responseBody):
 			remainStr = remainStr[splitNumber:]
 		else:
 			chunkedStr += str(hex(len(remainStr))).split('x')[1].encode('utf-8') + b'\r\n' + remainStr + b'\r\n'
-			remainStr = ""
+			remainStr = b''
 	chunkedStr += b'0\r\n\r\n'
 	return chunkedStr
+
+def unchunking(responseBody):
+	splitResponseBody = responseBody.split(b'\r\n')
+	assembledResponseBody = b''
+	for i in range(len(splitResponseBody)):
+		if(i%2==1 and len(splitResponseBody[i])):
+			assembledResponseBody += splitResponseBody[i]
+	return assembledResponseBody
 
 def sendRequestToServerSocket(serverSocket, request):
 	method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(request)
