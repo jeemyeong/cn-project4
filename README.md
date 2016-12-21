@@ -2,7 +2,7 @@
 
 ## Project_4 - Cache Proxy Server
 
-* Sanghak's Team [ 2013121225 *Lee, jeemyeong* 2014147557 *Lee, sanghak*]
+* Sanghak's Team [ 2013121225 *Lee jeemyeong*, 2014147557 *Lee sanghak*]
 
 ### Environment
 
