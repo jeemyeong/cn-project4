@@ -34,7 +34,7 @@ proxySocket = socket(AF_INET,SOCK_STREAM) #setup proxy socket
 proxySocket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1) #for break address using when this source finished 
 proxySocket.bind(('',proxyPort)) #bind proxy socket
 
-# list for caching
+# OrderedDict for caching
 # element: tuple of URL & response & status & content type
 cacheDict = OrderedDict()
 
@@ -205,6 +205,181 @@ def infoFirstLine(no, noConn, maxConn, cacheSize, maxSize, lenCache):
 	if(maxConn!=2047 and maxSize!=9223372036854775807):
 		return ('%d [Conn: %d/%d] [Cache: %.2f/%dMB] [Items: %d]'%(no, noConn, maxConn, cacheSize, maxSize, lenCache))
 
+def runClientSocket(clientSocket, addr, loggingLineList, persistentHost):
+	global no
+	global noConn
+	global cacheSize
+	global cacheDict
+	try:
+		clientSocketRunning = True 
+		while clientSocketRunning: #when client Socket running
+
+			assembledRequest = b'' #declare assembled request 
+			assemblingRequest = True
+			while assemblingRequest: #assembling request
+				request = clientSocket.recv(1024) #receive request
+				if not request: #if not request, do not assemble request
+					assemblingRequest = False
+				assembledRequest += request #assemble more request
+				if assembledRequest.find(b'\r\n\r\n') >= 0: #if assemble request has \r\n\r\n
+					assemblingRequest = False #finish assembling
+
+			if not assembledRequest: #if not request, break
+				break
+
+			method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(assembledRequest) #analyse request
+			
+			if not persistentHost: #if not persistent connection
+				no += 1
+				loggingLineList.append(infoFirstLine(no, noConn, maxConn, cacheSize, maxSize, len(cacheDict)))
+				loggingLineList.append('[CLI connected to %s:%i]'%(addr))
+
+			# check requested file is in cache
+			found = False
+			if url in cacheDict.keys():
+				found = True
+				cachedURL, cachedResponse, cachedStatus, cachedContentType = cacheDict[url]
+
+			# CACHE HIT
+			if found:
+				cacheDict.pop(url)
+				cacheDict[url] = (cachedURL, cachedResponse, cachedStatus, cachedContentType)
+
+				host = host.decode() #decode host
+				startTime = getTime()
+				loggingLineList.append(" ".join(('[CLI ==> PRX --- SRV]', '@', startTime)))
+				"".join(" ", )
+				loggingLineList.append(" ".join((">",method.decode(), url.decode())))
+				loggingLineList.append(" ".join((">",userAgent.decode())))
+				loggingLineList.append("[SRV connected to %s:%i]" % (host, 80))
+				loggingLineList.append('@@@@@@@@@@@@@@@@@@ CACHE HIT @@@@@@@@@@@@@@@@@@@@')
+				sendResponseToClientSocket(clientSocket, cachedResponse)
+				finishTime = getTime()
+				loggingLineList.append(" ".join(('[CLI <== PRX --- SRV]', '@', finishTime)))
+				loggingLineList.append(" ".join((">",cachedStatus.decode()))) #log status
+				if cachedContentType:
+					loggingLineList.append(" ".join((">",contentType.decode()))) #log type and size
+				tmp = getMilSec(startTime, finishTime)
+				loggingLineList.append('# %dms'%(tmp))
+				clientSocket.close()
+				loggingLineList.append('[CLI disconnected]')
+				loggingLineList.append('[SRV disconnected]')
+				loggingLineList.append("-----------------------------------------------")
+
+				break
+
+			host = host.decode() #decode host
+			startTime = getTime()
+			loggingLineList.append(" ".join(('[CLI ==> PRX --- SRV]', '@', startTime)))
+			loggingLineList.append(" ".join((">",method.decode(), url.decode())))
+			loggingLineList.append(" ".join((">",userAgent.decode())))
+
+			if host.find(".")<0 and host != "localhost": #when host is error, break
+				clientSocketRunning = False
+				loggingLineList.append("[CLI disconnected]")
+				clientSocket.close()
+				loggingLineList.append("-----------------------------------------------")
+				break
+
+			if persistentHost != host: #if not persistent connection
+				serverSocket = socket(AF_INET, SOCK_STREAM) #make new server socket
+				serverSocket.connect((host,80)) 
+				persistentHost = host
+				loggingLineList.append("[SRV connected to %s:%i]" % (host, 80))
+				serverSocket.settimeout(1) #set time out of server socket
+
+			sendRequestToServerSocket(serverSocket, assembledRequest) #send request to server socket
+			loggingLineList.append('################## CACHE MISS ###################')
+			loggingLineList.append(" ".join(('[CLI --- PRX ==> SRV]', '@', getTime())))
+			loggingLineList.append(" ".join((">",method.decode(), url.decode())))
+			loggingLineList.append(" ".join((">",userAgent.decode())))
+
+
+			
+
+			#declare variables
+			assembledChunk = b''
+			accumulatedLength = 9223372036854775807
+			bodyLength =0
+			lastChunk =0
+			AssemblingResponse = True
+			serverError = False
+
+			while AssemblingResponse: #assembling response
+				try:
+					chunk = serverSocket.recv(1024) #receive chunk
+					if not chunk:
+						break
+					assembledChunk += chunk #assemble chunk
+					contentLength, lastChunk, bodyLength = assembleChunk(assembledChunk) #assemble chunk and analyse
+					if contentLength:
+						accumulatedLength = contentLength
+					if accumulatedLength <= bodyLength or lastChunk: #if this is last, end this loop
+						AssemblingResponse = False
+				except Exception as e: #if timeout error, this is server error
+					AssemblingResponse = False
+					serverError = True
+
+			if serverError: #when server error
+				clientSocketRunning = False #close client
+				clientSocket.close()
+				loggingLineList.append("[CLI disconnected]")
+				serverSocket.close()
+				loggingLineList.append("[SRV disconnected]")
+				loggingLineList.append("-----------------------------------------------")
+				break
+
+			loggingLineList.append(" ".join(('[CLI --- PRX <== SRV]', '@', getTime())))
+			status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(assembledChunk) #analyse response
+			loggingLineList.append(" ".join((">",status.decode())))
+			if contentType:
+				loggingLineList.append(" ".join((">",contentType.decode())))
+
+			# cache overflow
+			while cacheSize+len(assembledChunk)/(1024*1024) >= maxSize:
+				removedCache = cacheDict.popitem(last=False)
+				cacheSize -= len(removedCache[1])
+
+				loggingLineList.append('################# CACHE REMOVED #################')
+				loggingLineList.append(" ".join(('> %s %.2fMB', (removedCache[0].decode(), len(removedCache[1])/(1024*1024)))))
+				loggingLineList.append('> This file has been removed due to LRU !')
+			
+			# push response into cache
+			cacheDict[url] = (url, assembledChunk, status, contentType)
+			cacheSize += len(assembledChunk)/(1024*1024)
+
+			loggingLineList.append('################## CACHE ADDED ##################')
+			loggingLineList.append('> %s %.2fMB'%(url.decode(), cacheSize))
+			loggingLineList.append('> This file has been added to the cache')
+			loggingLineList.append('#################################################')
+
+			sendResponseToClientSocket(clientSocket, assembledChunk) #send response to client socket
+			finishTime = getTime()
+			loggingLineList.append(" ".join(('[CLI <== PRX --- SRV]', '@', finishTime)))
+			loggingLineList.append(" ".join((">",status.decode()))) #log status
+			if contentType:
+				loggingLineList.append(" ".join((">",contentType.decode()))) #log type and size
+
+			tmp = getMilSec(startTime, finishTime)
+			loggingLineList.append('# %dms'%(tmp))
+
+			if persistentConnection==False or connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
+				loggingLineList.append('[CLI disconnected]')
+				clientSocket.close()
+				loggingLineList.append('[SRV disconnected]')
+				serverSocket.close()
+				loggingLineList.append("-----------------------------------------------")
+				clientSocketRunning = False
+				break
+	except Exception as e: # if client timeout error, deal it
+		clientSocket.close() #close client socket
+		if persistentHost: #if persistent connection, log these msg
+			loggingLineList.append("[CLI disconnected]")
+			clientSocket.close()
+			loggingLineList.append("[SRV disconnected]")
+			serverSocket.close()
+			loggingLineList.append("-----------------------------------------------")
+	return clientSocket, addr, loggingLineList, persistentHost
 
 def proxy():
 	global no
@@ -218,175 +393,7 @@ def proxy():
 		noConn += 1
 		clientSocket.settimeout(1) #setup timeout with 1 sec
 		persistentHost = None #setup persistent host as None
-	
-		try:
-			clientSocketRunning = True 
-			while clientSocketRunning: #when client Socket running
-
-				assembledRequest = b'' #declare assembled request 
-				assemblingRequest = True
-				while assemblingRequest: #assembling request
-					request = clientSocket.recv(1024) #receive request
-					if not request: #if not request, do not assemble request
-						assemblingRequest = False
-					assembledRequest += request #assemble more request
-					if assembledRequest.find(b'\r\n\r\n') >= 0: #if assemble request has \r\n\r\n
-						assemblingRequest = False #finish assembling
-
-				if not assembledRequest: #if not request, break
-					break
-
-				method, url, host, ver, userAgent, mobile, requestHeader, requestBody = analyseRequest(assembledRequest) #analyse request
-				
-				if not persistentHost: #if not persistent connection
-					no += 1
-					loggingLineList.append(infoFirstLine(no, noConn, maxConn, cacheSize, maxSize, len(cacheDict)))
-					loggingLineList.append('[CLI connected to %s:%i]'%(addr))
-
-				# check requested file is in cache
-				found = False
-				if url in cacheDict.keys():
-					found = True
-					cachedURL, cachedResponse, cachedStatus, cachedContentType = cacheDict[url]
-
-				# CACHE HIT
-				if found:
-					cacheDict.pop(url)
-					cacheDict[url] = (cachedURL, cachedResponse, cachedStatus, cachedContentType)
-
-					host = host.decode() #decode host
-					startTime = getTime()
-					loggingLineList.append(" ".join(('[CLI ==> PRX --- SRV]', '@', startTime)))
-					"".join(" ", )
-					loggingLineList.append(" ".join((">",method.decode(), url.decode())))
-					loggingLineList.append(" ".join((">",userAgent.decode())))
-					loggingLineList.append("[SRV connected to %s:%i]" % (host, 80))
-					loggingLineList.append('@@@@@@@@@@@@@@@@@@ CACHE HIT @@@@@@@@@@@@@@@@@@@@')
-					sendResponseToClientSocket(clientSocket, cachedResponse)
-					finishTime = getTime()
-					loggingLineList.append(" ".join(('[CLI <== PRX --- SRV]', '@', finishTime)))
-					loggingLineList.append(" ".join((">",cachedStatus.decode()))) #log status
-					if cachedContentType:
-						loggingLineList.append(" ".join((">",contentType.decode()))) #log type and size
-					tmp = getMilSec(startTime, finishTime)
-					loggingLineList.append('# %dms'%(tmp))
-					clientSocket.close()
-					loggingLineList.append('[CLI disconnected]')
-					loggingLineList.append('[SRV disconnected]')
-					loggingLineList.append("-----------------------------------------------")
-
-					break
-
-				host = host.decode() #decode host
-				startTime = getTime()
-				loggingLineList.append(" ".join(('[CLI ==> PRX --- SRV]', '@', startTime)))
-				loggingLineList.append(" ".join((">",method.decode(), url.decode())))
-				loggingLineList.append(" ".join((">",userAgent.decode())))
-
-				if host.find(".")<0 and host != "localhost": #when host is error, break
-					clientSocketRunning = False
-					loggingLineList.append("[CLI disconnected]")
-					clientSocket.close()
-					loggingLineList.append("-----------------------------------------------")
-					break
-
-				if persistentHost != host: #if not persistent connection
-					serverSocket = socket(AF_INET, SOCK_STREAM) #make new server socket
-					serverSocket.connect((host,80)) 
-					persistentHost = host
-					loggingLineList.append("[SRV connected to %s:%i]" % (host, 80))
-
-				sendRequestToServerSocket(serverSocket, assembledRequest) #send request to server socket
-				loggingLineList.append('################## CACHE MISS ###################')
-				loggingLineList.append(" ".join(('[CLI --- PRX ==> SRV]', '@', getTime())))
-				loggingLineList.append(" ".join((">",method.decode(), url.decode())))
-				loggingLineList.append(" ".join((">",userAgent.decode())))
-
-
-				serverSocket.settimeout(1) #set time out of server socket
-
-				#declare variables
-				assembledChunk = b''
-				accumulatedLength = 9223372036854775807
-				bodyLength =0
-				lastChunk =0
-				AssemblingResponse = True
-				serverError = False
-
-				while AssemblingResponse: #assembling response
-					try:
-						chunk = serverSocket.recv(1024) #receive chunk
-						if not chunk:
-							break
-						assembledChunk += chunk #assemble chunk
-						contentLength, lastChunk, bodyLength = assembleChunk(assembledChunk) #assemble chunk and analyse
-						if contentLength:
-							accumulatedLength = contentLength
-						if accumulatedLength <= bodyLength or lastChunk: #if this is last, end this loop
-							AssemblingResponse = False
-					except Exception as e: #if timeout error, this is server error
-						AssemblingResponse = False
-						serverError = True
-
-				if serverError: #when server error
-					clientSocketRunning = False #close client
-					clientSocket.close()
-					loggingLineList.append("[CLI disconnected]")
-					serverSocket.close()
-					loggingLineList.append("[SRV disconnected]")
-					loggingLineList.append("-----------------------------------------------")
-					break
-
-				loggingLineList.append(" ".join(('[CLI --- PRX <== SRV]', '@', getTime())))
-				status, ver, responseHeader, responseBody, contentType, contentLength, connection = analyseResponse(assembledChunk) #analyse response
-				loggingLineList.append(" ".join((">",status.decode())))
-				if contentType:
-					loggingLineList.append(" ".join((">",contentType.decode())))
-
-				# cache overflow
-				while cacheSize+len(assembledChunk)/(1024*1024) >= maxSize:
-					removedCache = cacheDict.popitem(last=False)
-					cacheSize -= len(removedCache[1])
-
-					loggingLineList.append('################# CACHE REMOVED #################')
-					loggingLineList.append(" ".join(('> %s %.2fMB', (removedCache[0].decode(), len(removedCache[1])/(1024*1024)))))
-					loggingLineList.append('> This file has been removed due to LRU !')
-				
-				# push response into cache
-				cacheDict[url] = (url, assembledChunk, status, contentType)
-				cacheSize += len(assembledChunk)/(1024*1024)
-
-				loggingLineList.append('################## CACHE ADDED ##################')
-				loggingLineList.append('> %s %.2fMB'%(url.decode(), cacheSize))
-				loggingLineList.append('> This file has been added to the cache')
-				loggingLineList.append('#################################################')
-
-				sendResponseToClientSocket(clientSocket, assembledChunk) #send response to client socket
-				finishTime = getTime()
-				loggingLineList.append(" ".join(('[CLI <== PRX --- SRV]', '@', finishTime)))
-				loggingLineList.append(" ".join((">",status.decode()))) #log status
-				if contentType:
-					loggingLineList.append(" ".join((">",contentType.decode()))) #log type and size
-
-				tmp = getMilSec(startTime, finishTime)
-				loggingLineList.append('# %dms'%(tmp))
-
-				if persistentConnection==False or connection == b'close' or (ver == b'HTTP/1.0' and connection.decode().lower() != 'keep-alive'): #if close connection or (HTTP/1.0 and not keep-alive), then disconnect
-					loggingLineList.append('[CLI disconnected]')
-					clientSocket.close()
-					loggingLineList.append('[SRV disconnected]')
-					serverSocket.close()
-					loggingLineList.append("-----------------------------------------------")
-					clientSocketRunning = False
-					break
-		except Exception as e: # if client timeout error, deal it
-			clientSocket.close() #close client socket
-			if persistentHost: #if persistent connection, log these msg
-				loggingLineList.append("[CLI disconnected]")
-				clientSocket.close()
-				loggingLineList.append("[SRV disconnected]")
-				serverSocket.close()
-				loggingLineList.append("-----------------------------------------------")
+		clientSocket, addr, loggingLineList, persistentHost = runClientSocket(clientSocket, addr, loggingLineList, persistentHost)
 		if(len(loggingLineList)): #print log
 			print('\n'.join(loggingLineList))
 		noConn -= 1
