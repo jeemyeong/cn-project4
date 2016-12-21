@@ -128,19 +128,18 @@ def sendResponseToClientSocket(clientSocket, response):
 		if compression and not gzipped and not chunked:
 			responseHeader[b'Content-Encoding'] = b'gzip'
 			responseBody = gzip.compress(responseBody)
-			if b'Content-Length' in responseHeader.keys():
-				responseHeader[b'Content-Length'] = str(len(responseBody)).encode('utf-8')
+			responseHeader[b'Content-Length'] = str(len(responseBody)).encode('utf-8')
 		if compression and not gzipped and chunked:
 			responseHeader[b'Content-Encoding'] = b'gzip'
-			assembledResponseBody = unchunking(responseBody)
-			responseBody = chunking(gzip.compress(assembledResponseBody))
+			assembledResponseBody = unchunkingResponseBody(responseBody)
+			responseBody = chunkingResponseBody(gzip.compress(assembledResponseBody))
 			if b'Content-Length' in responseHeader.keys():
 				del responseHeader[b'Content-Length']
 
 		if chunking and not chunked:
 			responseHeader[b'Transfer-Encoding'] = b'chunked'
 
-			responseBody = chunking(responseBody)
+			responseBody = chunkingResponseBody(responseBody)
 			if b'Content-Length' in responseHeader.keys():
 				del responseHeader[b'Content-Length']
 		if not persistentConnection:
@@ -153,7 +152,7 @@ def sendResponseToClientSocket(clientSocket, response):
 
 	clientSocket.send(newResponse)
 
-def chunking(responseBody):
+def chunkingResponseBody(responseBody):
 	chunkedStr = b''
 	splitNumber = int(len(responseBody)/4)
 	if(splitNumber==0):
@@ -169,7 +168,7 @@ def chunking(responseBody):
 	chunkedStr += b'0\r\n\r\n'
 	return chunkedStr
 
-def unchunking(responseBody):
+def unchunkingResponseBody(responseBody):
 	splitResponseBody = responseBody.split(b'\r\n')
 	assembledResponseBody = b''
 	for i in range(len(splitResponseBody)):
